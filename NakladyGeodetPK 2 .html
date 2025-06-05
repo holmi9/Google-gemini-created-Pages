@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kalkulačka nákladov na geodetické práce v5</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif; margin: 0; padding: 0; background-color: #f0f2f5;
+            color: #333; display: flex; flex-direction: column; min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px; margin: 20px auto; padding: 20px; background-color: #fff;
+            border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        }
+        #map-container {
+            position: relative; width: 100%; max-width: 1169px; margin: 20px auto;
+            border: 1px solid #ccc; background-image: url('parcely PK geodet.jpg');
+            background-size: contain; background-position: center; background-repeat: no-repeat;
+            user-select: none;
+        }
+        svg#interactive-map { display: block; width: 100%; height: auto; cursor: default; }
+        .parcel {
+            fill: rgba(168, 216, 234, 0.25); stroke: #333; stroke-width: 0.75;
+            cursor: pointer; transition: fill 0.3s, stroke-width 0.3s;
+        }
+        .parcel.selected-owner { fill: rgba(249, 199, 79, 0.4); stroke-width: 1; }
+        .parcel.my-parcel { fill: rgba(249, 65, 68, 0.5); stroke: #000000; stroke-width: 1.5; }
+        .parcel:hover { fill-opacity: 0.5; }
+        .point {
+            stroke: #000; stroke-width: 0.75; cursor: grab;
+            transition: r 0.2s, stroke-width 0.2s, fill 0.2s;
+            fill: #0077b6;
+        }
+        .point.dragging { cursor: grabbing; opacity: 0.7; }
+        .point:hover { r: 8 !important; }
+        .point.selected-point { stroke-width: 2; stroke: #ff00ff; r: 9 !important; }
+        .point.highlighted-for-my-parcel { fill: #70e000; stroke: #004b23; stroke-width: 1.5; r: 8 !important; }
+        .tooltip {
+            position: absolute; background-color: rgba(0,0,0,0.85); color: white; padding: 8px 12px;
+            border-radius: 4px; font-size: 0.9em; pointer-events: none; display: none; z-index: 1000; white-space: pre-line;
+        }
+        .legend { padding: 15px; background-color: #f8f9fa; border-radius: 8px; margin-top: 20px; }
+        .legend h3, .legend h4 { margin-top: 0; color: #005f73; }
+        .legend h4 { margin-top: 10px; font-size: 1.1em; }
+        .legend table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .legend th, .legend td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 0.9em; }
+        .legend th { background-color: #e9ecef; }
+        .tab-buttons button { background-color: #e0e0e0; border: 1px solid #ccc; padding: 10px 15px; cursor: pointer; border-radius: 4px 4px 0 0; margin-right: 2px; transition: background-color 0.3s; }
+        .tab-buttons button.active { background-color: #fff; border-bottom: 1px solid #fff; }
+        .tab-content { border: 1px solid #ccc; padding: 15px; border-top: none; border-radius: 0 0 4px 4px; }
+        .info-text { line-height: 1.6; margin-bottom: 20px; }
+        .parcel-label {
+            font-size: 9px; fill: #1a1a1a; pointer-events: none;
+            text-anchor: middle; dominant-baseline: central; font-weight: 500;
+        }
+        #admin-message { margin-top: 10px; padding: 8px; border-radius: 4px; text-align:center; font-weight:500;}
+        #admin-message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb;}
+        #admin-message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;}
+        #admin-message.info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-sky-700">Interaktívna kalkulačka nákladov na geodetické práce</h1>
+            <p class="text-gray-600">Lokalita Grefty, Pezinok (podľa mapky PK)</p>
+        </header>
+
+        <div class="tab-buttons mb-[-1px] relative z-10">
+            <button class="tab-button active" onclick="openTab(event, 'calculator')">Kalkulačka a Mapa</button>
+            <button class="tab-button" onclick="openTab(event, 'info')">Informácie a Dôvody</button>
+        </div>
+
+        <div id="calculator" class="tab-content">
+            <p class="mb-2"><strong>Návod na úpravu (modrých) bodov:</strong>
+                <ul class="list-disc list-inside ml-4">
+                    <li><strong>Presunúť bod:</strong> Kliknite na modrý bod, podržte tlačidlo myši a potiahnite ho na novú pozíciu.</li>
+                    <li><strong>Vymazať bod:</strong> Dvakrát rýchlo kliknite (dvojklik) na modrý bod.</li>
+                    <li><strong>Pridať modrý bod:</strong> Dvakrát rýchlo kliknite (dvojklik) na prázdne miesto na mape.</li>
+                </ul>
+            </p>
+            <p class="mt-1 mb-4 text-sm text-orange-700"><strong>Dôležité:</strong> Pre správne priradenie nákladov a zvýraznenie bodov je kľúčové manuálne upraviť pole `adjacentBluePointIds` pre každú parcelu priamo v HTML/JavaScript kóde podľa vašej mapky.</p>
+            <p class="mb-4"><strong>Návod na výber parciel:</strong>
+                <ol class="list-decimal list-inside ml-4">
+                    <li>Kliknutím na parcelu v mape ju označíte ako <strong class="text-red-600">"Moja parcela"</strong>. Priradené modré body sa zvýraznia.</li>
+                    <li>Opätovným kliknutím na inú parcelu zmeníte výber "Moja parcela".</li>
+                    <li>Podržaním klávesy <kbd>Ctrl</kbd> (alebo <kbd>Cmd</kbd> na Macu) a kliknutím na parcelu označíte/odznačíte parcelu ako <strong class="text-yellow-600">"Vlastník známy"</strong>.</li>
+                    <li>Kliknutím na modrý geodetický bod zobrazíte v legende detailné informácie o ňom.</li>
+                </ol>
+            </p>
+            <div id="admin-message" class="text-sm mb-4"></div>
+            <div id="map-container">
+                <svg id="interactive-map" viewBox="0 0 1169 850">
+                    {/* Parcels and BLUE points will be injected here by JavaScript */}
+                </svg>
+                <div id="tooltip" class="tooltip">Tooltip text</div>
+            </div>
+            <div id="legend" class="legend">
+                {/* Legend content will be injected here by JavaScript */}
+            </div>
+        </div>
+
+        <div id="info" class="tab-content" style="display:none;">
+            <h3>Prečo spoločné vytýčenie a rozpočítanie nákladov?</h3>
+            <div class="info-text">
+                <p>Vážení susedia, vlastníci pozemkov v lokalite Grefty Pezinok,</p>
+                <p>Cieľom tejto iniciatívy je spoločné a koordinované vytýčenie hraníc našich individuálnych pozemkov a tiež spoločnej prístupovej cesty...</p>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // --- DATA ---
+    const GEODETIC_COSTS_ORIGINAL = {
+        totalBluePointsCost: 440.09, totalWhitePointsCost: 225.16, totalOrangePointsCost: 163.75,
+        originalNumBlue: 43, originalNumWhite: 22, originalNumOrange: 16
+    };
+    let currentGeodeticCosts = { numBluePoints: 0 };
+
+    let parcels = [
+        // Horný rad parciel (zľava doprava) - UPRAVTE adjacentBluePointIds podľa vašej mapky!
+        { id: "5500/5", name: "5500/5", svgPath: "M60,145 L200,142 L200,255 L60,258 Z", initialBlueCost: 33.62, cx:130, cy:200, adjacentBluePointIds: ["B1","B2","B8","B9", "B_5_extra1", "B_5_extra2"] }, // Príklad: 5500/5 môže mať viac bodov
+        { id: "5500/4", name: "5500/4", svgPath: "M200,142 L340,140 L340,252 L200,255 Z", initialBlueCost: 31.04, cx:270, cy:197, adjacentBluePointIds: ["B2","B3","B10","B9"] },
+        { id: "5500/3", name: "5500/3", svgPath: "M340,140 L480,138 L480,250 L340,252 Z", initialBlueCost: 18.12, cx:410, cy:195, adjacentBluePointIds: ["B3","B4","B11","B10", "B_3_extra1", "B_3_extra2", "B_3_extra3"] },
+        { id: "5500/2", name: "5500/2", svgPath: "M480,138 L620,136 L620,248 L480,250 Z", initialBlueCost: 33.63, cx:550, cy:193, adjacentBluePointIds: ["B4","B5","B12","B11"] },
+        { id: "5500/1", name: "5500/1", svgPath: "M620,136 L760,134 L758,246 L620,248 Z", initialBlueCost: 38.81, cx:690, cy:190, adjacentBluePointIds: ["B5","B6","B13","B12"] },
+        { id: "5500/9", name: "5500/9", svgPath: "M760,134 L895,132 L892,243 L758,246 Z", initialBlueCost: 25.86, cx:827, cy:188, adjacentBluePointIds: ["B6","B7","B14","B13"] },
+        // Druhý rad
+        { id: "5500/6", name: "5500/6", svgPath: "M60,258 L200,255 L200,370 L60,373 Z", initialBlueCost: 23.28, cx:130, cy:314, adjacentBluePointIds: ["B8","B9","B15","B16"] },
+        { id: "5500/7", name: "5500/7", svgPath: "M200,255 L340,252 L340,365 L200,370 Z", initialBlueCost: 15.53, cx:270, cy:312, adjacentBluePointIds: ["B9","B10","B17","B18"] },
+        { id: "5500/8", name: "5500/8", svgPath: "M340,252 L480,250 L480,362 L340,365 Z", initialBlueCost: 12.94, cx:410, cy:307, adjacentBluePointIds: ["B10","B11","B19","B17"] },
+        { id: "5500/17", name: "5500/17", svgPath: "M480,250 L620,248 L618,358 L480,362 Z", initialBlueCost: 10.34, cx:550, cy:305, adjacentBluePointIds: ["B11","B12","B20","B19", "B17"] }, // 5500/17 susedí aj s 5500/8 (cez B17, B19), aj s 5500/11 (cez B12, B20) a 5500/16 (cez B19, B20 - ak by B20 bol spoločný aj pre 16)
+        { id: "5500/11", name: "5500/11", svgPath: "M620,248 L758,246 L755,355 L618,358 Z", initialBlueCost: 3.41, cx:688, cy:302, adjacentBluePointIds: ["B12","B13","B21","B20"] },
+        { id: "5500/10", name: "5500/10", svgPath: "M758,246 L892,243 L889,352 L755,355 Z", initialBlueCost: 15.53, cx:825, cy:299, adjacentBluePointIds: ["B13","B14","B22","B21"] },
+        // Tretí rad
+        { id: "5500/18", name: "5500/18", svgPath: "M60,373 L200,370 L200,482 L60,485 Z", initialBlueCost: 10.34, cx:130, cy:427, adjacentBluePointIds: ["B15","B16","B23","B24", "B_18_extra_edge", "B_18_extra_corner"] },
+        { id: "5500/19", name: "5500/19", svgPath: "M200,370 L340,365 L340,477 L200,482 Z", initialBlueCost: 28.47, cx:270, cy:423, adjacentBluePointIds: ["B18","B17","B25","B26"] },
+        { id: "5500/16", name: "5500/16", svgPath: "M340,365 L480,362 L480,473 L340,477 Z", initialBlueCost: 0.00, cx:410, cy:419, adjacentBluePointIds: ["B17", "B19", "B25", "B_16_corner_br"] }, // Príklad bodov pre 5500/16 (aj keď neplatí)
+        { id: "5500/20", name: "5500/20", svgPath: "M480,362 L618,358 L615,468 L480,473 Z", initialBlueCost: 20.69, cx:549, cy:415, adjacentBluePointIds: ["B19","B20","B27","B28"] },
+        { id: "5500/12", name: "5500/12", svgPath: "M618,358 L755,355 L752,465 L615,468 Z", initialBlueCost: 20.69, cx:686, cy:411, adjacentBluePointIds: ["B20","B21","B29","B27", "B_12_extra_mid_top", "B_12_extra_mid_bottom"] },
+        { id: "5500/15", name: "5500/15", svgPath: "M755,355 L889,352 L886,462 L752,465 Z", initialBlueCost: 18.11, cx:822, cy:408, adjacentBluePointIds: ["B21","B22","B30","B29"] },
+        // Štvrtý rad
+        { id: "5500/13", name: "5500/13", svgPath: "M60,485 L200,482 L200,595 L60,598 Z", initialBlueCost: 23.28, cx:130, cy:540, adjacentBluePointIds: ["B23","B24","B31","B32"] },
+        { id: "5500/21", name: "5500/21", svgPath: "M200,482 L340,477 L340,588 L200,595 Z", initialBlueCost: 18.12, cx:270, cy:535, adjacentBluePointIds: ["B26","B25","B33","B34"] },
+        { id: "5500/22", name: "5500/22", svgPath: "M340,477 L480,473 L480,583 L340,588 Z", initialBlueCost: 25.87, cx:410, cy:529, adjacentBluePointIds: ["B25","B28","B35","B33", "B_22_extra_top", "B_22_extra_bottom", "B_22_extra_left_mid"] },
+        { id: "5500/24", name: "5500/24", svgPath: "M480,473 L615,468 L612,578 L480,583 Z", initialBlueCost: 28.47, cx:547, cy:524, adjacentBluePointIds: ["B28","B27","B36","B35"] },
+        { id: "5500/23", name: "5500/23", svgPath: "M615,468 L752,465 L749,575 L612,578 Z", initialBlueCost: 36.22, cx:683, cy:520, adjacentBluePointIds: ["B27","B29","B37","B36"] },
+        // Cesty
+        { id: "road-upper", name: "Cesta", svgPath: "M60,630 L895,615 L895,655 L60,670 Z", initialBlueCost: 0, cx:477, cy:640, nonClickable: true },
+        { id: "road-lower", name: "Cesta", svgPath: "M60,670 L895,655 L895,695 L60,710 Z", initialBlueCost: 0, cx:477, cy:680, nonClickable: true },
+        { id: "road-right-vertical", name: "Cesta", svgPath: "M920,130 L960,128 L955,695 L915,698 Z", initialBlueCost: 0, cx:938, cy:413, nonClickable: true },
+    ];
+    parcels.forEach(p => {
+        if (!p.nonClickable) { p.isKnownOwner = true; p.isMyParcel = false; }
+    });
+
+    let points = [];
+    function initializePoints() {
+        points = [];
+        const initialBluePointsData = [
+            // Základné body z predchádzajúcej verzie
+            { id: "B1", x: 60, y: 145 }, { id: "B2", x: 200, y: 142 }, { id: "B3", x: 340, y: 140 }, { id: "B4", x: 480, y: 138 }, { id: "B5", x: 620, y: 136 }, { id: "B6", x: 760, y: 134 }, { id: "B7", x: 895, y: 132 },
+            { id: "B8", x: 60, y: 258 }, { id: "B9", x: 200, y: 255 }, { id: "B10", x: 340, y: 252 }, { id: "B11", x: 480, y: 250 }, { id: "B12", x: 620, y: 248 }, { id: "B13", x: 758, y: 246 }, { id: "B14", x: 892, y: 243 },
+            { id: "B15", x: 60, y: 373 }, { id: "B16", x: 200, y: 370 }, { id: "B17", x: 340, y: 365 }, { id: "B18", x: 270, y: 367 }, { id: "B19", x: 480, y: 362 }, { id: "B20", x: 618, y: 358 }, { id: "B21", x: 755, y: 355 }, { id: "B22", x: 889, y: 352 },
+            { id: "B23", x: 60, y: 485 }, { id: "B24", x: 200, y: 482 }, { id: "B25", x: 340, y: 477 }, { id: "B26", x: 270, y: 479 }, { id: "B27", x: 615, y: 468 }, { id: "B28", x: 480, y: 473 }, { id: "B29", x: 752, y: 465 }, { id: "B30", x: 886, y: 462 },
+            { id: "B31", x: 60, y: 598 }, { id: "B32", x: 200, y: 595 }, { id: "B33", x: 340, y: 588 }, { id: "B34", x: 270, y: 591 }, { id: "B35", x: 480, y: 583 }, { id: "B36", x: 612, y: 578 }, { id: "B37", x: 749, y: 575 },
+            { id: "B38", x: 920, y: 130 }, { id: "B39", x: 950, y: 280 }, { id: "B40", x: 945, y: 450 }, { id: "B41", x: 930, y: 580 }, { id: "B42", x: 915, y: 698 }, { id: "B43", x: 750, y: 618 },
+            // Príklady "extra" bodov pre detailnejšie parcely - upravte ich X, Y a pridajte do `adjacentBluePointIds`!
+            { id: "B_3_extra1", x: 370, y: 190 }, { id: "B_3_extra2", x: 420, y: 200 }, { id: "B_3_extra3", x: 450, y: 240 },
+            { id: "B_5_extra1", x: 100, y: 190 }, { id: "B_5_extra2", x: 150, y: 250 },
+            { id: "B_18_extra_edge", x: 130, y: 400 }, { id: "B_18_extra_corner", x: 190, y: 450 },
+            { id: "B_12_extra_mid_top", x: 680, y: 300 }, { id: "B_12_extra_mid_bottom", x: 690, y: 400 },
+            { id: "B_22_extra_top", x: 380, y: 500 }, { id: "B_22_extra_bottom", x: 400, y: 550 }, { id: "B_22_extra_left_mid", x: 350, y: 530 },
+            { id: "B_16_corner_br", x: 470, y: 460} // Príklad pre 5500/16
+        ];
+        initialBluePointsData.forEach(bp => points.push({ ...bp, type: "blue"}));
+        updatePointCounts();
+    }
+
+    function updatePointCounts() {
+        currentGeodeticCosts.numBluePoints = points.filter(p => p.type === 'blue').length;
+    }
+
+    let selectedParcelId = null;
+    let selectedPointId = null;
+    const tooltip = document.getElementById('tooltip');
+    const mapElement = document.getElementById('interactive-map');
+    const adminMessageEl = document.getElementById('admin-message');
+    let newPointCoords = {x:0, y:0};
+
+    function showAdminMessage(message, type = 'info') {
+        adminMessageEl.textContent = message;
+        adminMessageEl.className = 'text-sm mb-4 ';
+        if (type === 'success') adminMessageEl.classList.add('success');
+        else if (type === 'error') adminMessageEl.classList.add('error');
+        else adminMessageEl.classList.add('info');
+        setTimeout(() => { adminMessageEl.textContent = ''; adminMessageEl.className='text-sm mb-4 ';}, 4000);
+    }
+
+    let selectedDraggablePoint = null;
+    let offset = { x: 0, y: 0 };
+    function startDrag(evt) {
+        if (evt.target.classList.contains('point')) {
+            selectedDraggablePoint = evt.target; selectedDraggablePoint.classList.add('dragging');
+            const CTM = mapElement.getScreenCTM();
+            offset.x = (evt.clientX - CTM.e) / CTM.a - parseFloat(selectedDraggablePoint.getAttributeNS(null, "cx"));
+            offset.y = (evt.clientY - CTM.f) / CTM.d - parseFloat(selectedDraggablePoint.getAttributeNS(null, "cy"));
+        }
+    }
+    function drag(evt) {
+        if (selectedDraggablePoint) {
+            evt.preventDefault(); const CTM = mapElement.getScreenCTM();
+            const newX = (evt.clientX - CTM.e) / CTM.a - offset.x;
+            const newY = (evt.clientY - CTM.f) / CTM.d - offset.y;
+            selectedDraggablePoint.setAttributeNS(null, "cx", newX); selectedDraggablePoint.setAttributeNS(null, "cy", newY);
+        }
+    }
+    function endDrag(evt) {
+        if (selectedDraggablePoint) {
+            const pointId = selectedDraggablePoint.id.replace('point-', '');
+            const pointData = points.find(p => p.id === pointId);
+            if (pointData) {
+                pointData.x = parseFloat(selectedDraggablePoint.getAttributeNS(null, "cx"));
+                pointData.y = parseFloat(selectedDraggablePoint.getAttributeNS(null, "cy"));
+                showAdminMessage(`Bod ${pointId} presunutý na X:${pointData.x.toFixed(1)}, Y:${pointData.y.toFixed(1)}`, 'info');
+            }
+            selectedDraggablePoint.classList.remove('dragging'); selectedDraggablePoint = null;
+            recalculateAndRender();
+        }
+    }
+    mapElement.addEventListener('mousedown', startDrag); mapElement.addEventListener('mousemove', drag);
+    mapElement.addEventListener('mouseup', endDrag); mapElement.addEventListener('mouseleave', endDrag);
+
+    function renderMap() {
+        mapElement.innerHTML = '';
+        const myParcel = parcels.find(p => p.isMyParcel);
+        parcels.forEach(parcel => {
+            if (parcel.nonClickable) {
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute("d", parcel.svgPath); path.setAttribute("id", `parcel-${parcel.id}`);
+                path.style.fill = "rgba(220, 220, 220, 0.3)"; path.style.stroke = "#bbb";
+                path.style.strokeWidth = "0.5"; path.style.pointerEvents = "none";
+                mapElement.appendChild(path);
+            }
+        });
+        parcels.forEach(parcel => {
+            if (parcel.nonClickable) return;
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", parcel.svgPath); path.setAttribute("id", `parcel-${parcel.id}`);
+            path.classList.add("parcel");
+            if (parcel.isMyParcel) path.classList.add("my-parcel");
+            if (parcel.isKnownOwner && !parcel.isMyParcel) path.classList.add("selected-owner");
+            path.addEventListener('click', (event) => handleParcelClick(parcel.id, event.ctrlKey || event.metaKey));
+            path.addEventListener('mousemove', (event) => {
+                tooltip.style.display = 'block'; tooltip.style.left = `${event.pageX + 15}px`;
+                tooltip.style.top = `${event.pageY + 15}px`;
+                tooltip.textContent = `Parcela: ${parcel.name}\nKlikni pre výber.\nCtrl+Klik pre označenie vlastníka.`;
+            });
+            path.addEventListener('mouseout', () => { tooltip.style.display = 'none'; });
+            mapElement.appendChild(path);
+            if (parcel.cx && parcel.cy) {
+                const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                label.setAttribute("x", parcel.cx); label.setAttribute("y", parcel.cy);
+                label.classList.add("parcel-label"); label.textContent = parcel.name.replace('5500/','');
+                mapElement.appendChild(label);
+            }
+        });
+        points.filter(p => p.type === 'blue').forEach(point => {
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", point.x); circle.setAttribute("cy", point.y);
+            circle.setAttribute("r", 6);
+            circle.setAttribute("id", `point-${point.id}`);
+            circle.classList.add("point");
+            if (point.id === selectedPointId) circle.classList.add("selected-point");
+            if (myParcel && myParcel.adjacentBluePointIds && myParcel.adjacentBluePointIds.includes(point.id)) {
+                circle.classList.add("highlighted-for-my-parcel");
+            }
+            circle.addEventListener('click', () => handlePointClick(point.id));
+            circle.addEventListener('dblclick', (evt) => { evt.stopPropagation(); deletePoint(point.id); });
+            circle.addEventListener('mousemove', (event) => {
+                tooltip.style.display = 'block'; tooltip.style.left = `${event.pageX + 15}px`;
+                tooltip.style.top = `${event.pageY + 15}px`;
+                tooltip.textContent = `Modrý Bod: ${point.id}\nKlikni pre detail.\nDvojklik pre vymazanie.\nPotiahni pre presun.`;
+            });
+            circle.addEventListener('mouseout', () => { tooltip.style.display = 'none'; });
+            mapElement.appendChild(circle);
+        });
+    }
+
+    function renderLegend() {
+        const legendDiv = document.getElementById('legend');
+        const knownOwnersCount = parcels.filter(p => p.isKnownOwner && !p.nonClickable).length;
+        const unknownOwnersCount = parcels.filter(p => !p.isKnownOwner && !p.nonClickable).length;
+        let myParcelData = parcels.find(p => p.isMyParcel);
+        let costs = { blue: 0, white: 0, orange: 0, total: 0 };
+
+        if (myParcelData) {
+            costs.blue = myParcelData.initialBlueCost;
+            if (myParcelData.isKnownOwner && knownOwnersCount > 0) {
+                const costPerOriginalWhitePoint = GEODETIC_COSTS_ORIGINAL.totalWhitePointsCost / (GEODETIC_COSTS_ORIGINAL.originalNumWhite || 1);
+                costs.white = costPerOriginalWhitePoint * GEODETIC_COSTS_ORIGINAL.originalNumWhite / knownOwnersCount;
+                const costPerOriginalOrangePoint = GEODETIC_COSTS_ORIGINAL.totalOrangePointsCost / (GEODETIC_COSTS_ORIGINAL.originalNumOrange || 1);
+                costs.orange = costPerOriginalOrangePoint * GEODETIC_COSTS_ORIGINAL.originalNumOrange / knownOwnersCount;
+            }
+            costs.total = costs.blue + costs.white + costs.orange;
+        }
+
+        const costPerOriginalBluePoint = GEODETIC_COSTS_ORIGINAL.totalBluePointsCost / (GEODETIC_COSTS_ORIGINAL.originalNumBlue || 1);
+        const currentTotalBlueDisplayCost = costPerOriginalBluePoint * currentGeodeticCosts.numBluePoints;
+        const currentTotalWhiteDisplayCost = GEODETIC_COSTS_ORIGINAL.totalWhitePointsCost;
+        const currentTotalOrangeDisplayCost = GEODETIC_COSTS_ORIGINAL.totalOrangePointsCost;
+
+        let pointInfoHtml = '';
+        if (selectedPointId) {
+            const point = points.find(p => p.id === selectedPointId && p.type === 'blue');
+            if (point) {
+                let singleBluePointCost = currentGeodeticCosts.numBluePoints > 0 ? currentTotalBlueDisplayCost / currentGeodeticCosts.numBluePoints : 0;
+                let contributors = [];
+                let contributingParcelsList = parcels.filter(p => !p.nonClickable && p.isKnownOwner && p.adjacentBluePointIds && p.adjacentBluePointIds.includes(point.id));
+                let actualPayersCount = 0;
+                contributingParcelsList.forEach(p => {
+                    if (p.id !== "5500/16") { actualPayersCount++; }
+                });
+                const sharePerPayingParcel = actualPayersCount > 0 ? singleBluePointCost / actualPayersCount : 0;
+
+                contributingParcelsList.forEach(p => {
+                    let shareText = "";
+                    if (p.id === "5500/16") { shareText = `0.00 € (uhradené/neprispieva)`; }
+                    else if (p.id === "5500/11") { shareText = `prispieva (celkový podiel na modré body limitovaný na ${p.initialBlueCost.toFixed(2)}€)`; }
+                    else { shareText = `${sharePerPayingParcel.toFixed(2)} €`; }
+                    contributors.push(`${p.name}: ${shareText}`);
+                });
+                if (contributors.length === 0) contributors.push("Žiadni známi vlastníci neprispievajú / špecifický bod.");
+                pointInfoHtml = `<h4>Detail modrého bodu: ${point.id}</h4><p>Vypočítaný náklad na tento bod: ${singleBluePointCost.toFixed(2)} €</p><p>Prispievajúce parcely (${contributors.length > 0 ? 'dotykové známe' : 'žiadne'}):</p><ul class="list-disc list-inside ml-4 text-sm">${contributors.map(c => `<li>${c}</li>`).join('')}</ul><hr class="my-2">`;
+            }
+        }
+        let myParcelBluePointsDetail = '';
+        if (myParcelData && myParcelData.adjacentBluePointIds) {
+            myParcelBluePointsDetail = `<h4>Modré body priradené k Vašej parcele (${myParcelData.name}):</h4><ul>`;
+            const costPerSingleBluePoint = currentGeodeticCosts.numBluePoints > 0 ? currentTotalBlueDisplayCost / currentGeodeticCosts.numBluePoints : 0;
+            myParcelData.adjacentBluePointIds.forEach(bpId => {
+                const bluePoint = points.find(p => p.id === bpId && p.type === 'blue');
+                if (bluePoint) { myParcelBluePointsDetail += `<li class="text-sm">Bod ${bpId}: Vaša parcela prispieva. (Celkový náklad na tento bod: ${costPerSingleBluePoint.toFixed(2)}€)</li>`; }
+            });
+            myParcelBluePointsDetail += `</ul><hr class="my-2">`;
+        }
+        legendDiv.innerHTML = `${pointInfoHtml}${myParcelBluePointsDetail}<h3>Súhrn nákladov</h3><table><tr><th>Položka</th><th>Hodnota</th></tr><tr><td>Moja parcela</td><td>${myParcelData ? myParcelData.name : 'Nevybraná'}</td></tr><tr><td>Náklady na modré body (moja parcela)</td><td>${costs.blue.toFixed(2)} €</td></tr><tr><td>Náklady na biele body (moja parcela)</td><td>${costs.white.toFixed(2)} €</td></tr><tr><td>Náklady na oranžové body (moja parcela)</td><td>${costs.orange.toFixed(2)} €</td></tr><tr><td class="font-bold">Celkové náklady (moja parcela)</td><td class="font-bold">${costs.total.toFixed(2)} €</td></tr><tr><td colspan="2">&nbsp;</td></tr><tr><td>Počet parciel so známym vlastníkom</td><td>${knownOwnersCount}</td></tr><tr><td>Počet parciel s neznámym vlastníkom</td><td>${unknownOwnersCount}</td></tr><tr><td colspan="2">&nbsp;</td></tr><tr><td>Celkové náklady na modré body (všetky)</td><td>${currentTotalBlueDisplayCost.toFixed(2)} € (${currentGeodeticCosts.numBluePoints} bodov)</td></tr><tr><td>Celkové náklady na biele body (všetky)</td><td>${currentTotalWhiteDisplayCost.toFixed(2)} € (${GEODETIC_COSTS_ORIGINAL.originalNumWhite} bodov)</td></tr><tr><td>Celkové náklady na oranžové body (všetky)</td><td>${currentTotalOrangeDisplayCost.toFixed(2)} € (${GEODETIC_COSTS_ORIGINAL.originalNumOrange} bodov)</td></tr><tr><td class="font-bold">Grand Total (všetky body)</td><td class="font-bold">${(currentTotalBlueDisplayCost + currentTotalWhiteDisplayCost + currentTotalOrangeDisplayCost).toFixed(2)} €</td></tr></table><p class="text-xs mt-2">Poznámka: Náklady na modré body pre 'Mojú parcelu' sú fixné podľa tabuľky. Náklady na biele a oranžové body sa dynamicky delia medzi parcely označené ako 'Vlastník známy'.</p>`;
+    }
+
+    function handleParcelClick(parcelId, isCtrlClick) {
+        const parcel = parcels.find(p => p.id === parcelId);
+        if (!parcel || parcel.nonClickable) return;
+        if (isCtrlClick) {
+            parcel.isKnownOwner = !parcel.isKnownOwner;
+            if (parcel.isMyParcel && !parcel.isKnownOwner) { parcel.isMyParcel = false; selectedParcelId = null; }
+        } else {
+            const currentlyMyParcel = parcels.find(p => p.isMyParcel);
+            if (currentlyMyParcel && currentlyMyParcel.id === parcelId) {} else {
+                 parcels.forEach(p => p.isMyParcel = (p.id === parcelId));
+                 selectedParcelId = parcelId; parcel.isKnownOwner = true;
+            }
+        }
+        selectedPointId = null; recalculateAndRender();
+    }
+    function handlePointClick(pointId) {
+        selectedPointId = selectedPointId === pointId ? null : pointId;
+        recalculateAndRender();
+    }
+    function recalculateAndRender() { updatePointCounts(); renderMap(); renderLegend(); }
+
+    function deletePoint(pointId) {
+        const pointIndex = points.findIndex(p => p.id === pointId && p.type === 'blue');
+        if (pointIndex > -1) {
+            points.splice(pointIndex, 1);
+            showAdminMessage(`Modrý bod ${pointId} vymazaný.`, 'info');
+            if (selectedPointId === pointId) selectedPointId = null;
+            recalculateAndRender();
+        }
+    }
+
+    mapElement.addEventListener('dblclick', (evt) => {
+        if (evt.target.tagName.toLowerCase() === 'svg' || evt.target.tagName.toLowerCase() === 'path') {
+            const CTM = mapElement.getScreenCTM();
+            newPointCoords.x = (evt.clientX - CTM.e) / CTM.a;
+            newPointCoords.y = (evt.clientY - CTM.f) / CTM.d;
+            addNewBluePointToMap();
+        }
+    });
+
+    function addNewBluePointToMap() {
+        let i = 1;
+        while (points.find(p => p.id === `B_new_${i}`)) { i++; } // Ensure unique ID for new points
+        const newPointId = `B_new_${i}`;
+        points.push({ id: newPointId, x: newPointCoords.x, y: newPointCoords.y, type: 'blue' });
+        showAdminMessage(`Nový modrý bod ${newPointId} pridaný. Upravte `+"`adjacentBluePointIds`"+` parciel, ak sa ich tento bod týka.`, 'success');
+        recalculateAndRender();
+    }
+
+    function openTab(evt, tabName) {
+        var i, tabcontent, tablinks;
+        tabcontent = document.getElementsByClassName("tab-content");
+        for (i = 0; i < tabcontent.length; i++) { tabcontent[i].style.display = "none"; }
+        tablinks = document.getElementsByClassName("tab-button");
+        for (i = 0; i < tablinks.length; i++) { tablinks[i].className = tablinks[i].className.replace(" active", ""); }
+        document.getElementById(tabName).style.display = "block";
+        evt.currentTarget.className += " active";
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const userParcel = parcels.find(p => p.id === "5500/17");
+        if (userParcel) {
+            userParcel.isMyParcel = true; userParcel.isKnownOwner = true; selectedParcelId = userParcel.id;
+        }
+        initializePoints();
+        recalculateAndRender();
+        document.querySelector('.tab-button').click();
+        const infoDiv = document.getElementById('info').querySelector('.info-text');
+        if (infoDiv.children.length < 2) {
+             infoDiv.innerHTML = `<p>Vážení susedia, vlastníci pozemkov v lokalite Grefty Pezinok,</p><p>Cieľom tejto iniciatívy je spoločné a koordinované vytýčenie hraníc našich individuálnych pozemkov a tiež spoločnej prístupovej cesty. Realizácia týchto geodetických prác v spoločnej réžii prináša niekoľko výhod:</p><ul class="list-disc list-inside ml-4 my-2"><li><strong>Úspora nákladov:</strong> Geodet si účtuje poplatok za výjazd a často aj minimálny počet bodov. Pri spoločnej objednávke sa tieto fixné náklady rozdelia medzi viacerých vlastníkov, čím sa znižuje finančná záťaž pre každého jednotlivca. Cena za bod môže byť tiež výhodnejšia pri väčšom počte bodov.</li><li><strong>Presnosť a konzistentnosť:</strong> Jednotné zameranie všetkých dotknutých parciel a cesty jedným geodetom naraz zabezpečuje vyššiu presnosť a eliminuje potenciálne nezrovnalosti, ktoré by mohli vzniknúť pri samostatnom vytyčovaní jednotlivými vlastníkmi v rôznom čase.</li><li><strong>Spravodlivé rozdelenie:</strong> Navrhovaný model rozpočítania nákladov sa snaží byť maximálne transparentný a spravodlivý. Náklady na hraničné body parciel (modré body) sú priradené tým parcelám, ktorých sa priamo týkajú. Náklady na body definujúce spoločnú prístupovú cestu (biele a oranžové body) sa delia rovným dielom medzi všetky zúčastnené parcely, keďže cesta slúži všetkým.</li><li><strong>Predchádzanie sporom:</strong> Jasne vytýčené hranice sú základom dobrých susedských vzťahov a predchádzajú možným budúcim sporom o priebeh hraníc.</li><li><strong>Príprava na ďalší rozvoj:</strong> Presné vytýčenie je nevyhnutným krokom pre akékoľvek ďalšie plánovanie, či už ide o oplotenie, výstavbu alebo iné úpravy pozemkov, ako aj pre kolaudáciu spoločnej cesty.</li></ul><p>Veríme, že spoločný postup je v najlepšom záujme všetkých vlastníkov a umožní nám efektívne a hospodárne zabezpečiť túto dôležitú súčasť správy našich nehnuteľností.</p>`;
+        }
+    });
+</script>
+</body>
+</html>
